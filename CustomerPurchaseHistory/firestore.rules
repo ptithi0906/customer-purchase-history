@@ -1,0 +1,87 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidCustomer(data) {
+      return data.keys().hasAll(['customerId', 'name', 'phoneNo', 'dob', 'email', 'address', 'createdAt'])
+        && data.keys().hasOnly(['customerId', 'name', 'phoneNo', 'dob', 'email', 'address', 'createdAt'])
+        && isValidId(data.customerId)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 100
+        && data.phoneNo is string && data.phoneNo.matches('^[0-9]{10}$')
+        && data.dob is string && data.dob.size() >= 8 && data.dob.size() <= 20
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 120
+        && data.address is string && data.address.size() >= 5 && data.address.size() <= 300
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPurchase(data) {
+      return data.keys().hasAll([
+          'purchaseId', 'customerId', 'customerName', 'productName',
+          'category', 'quantity', 'pricePerUnit', 'totalAmount',
+          'purchaseDate', 'paymentMethod', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'purchaseId', 'customerId', 'customerName', 'productName',
+          'category', 'quantity', 'pricePerUnit', 'totalAmount',
+          'purchaseDate', 'paymentMethod', 'createdAt'
+        ])
+        && isValidId(data.purchaseId)
+        && isValidId(data.customerId)
+        && data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 100
+        && data.productName is string && data.productName.size() >= 2 && data.productName.size() <= 150
+        && data.category is string && data.category.size() >= 2 && data.category.size() <= 60
+        && data.quantity is int && data.quantity > 0 && data.quantity <= 10000
+        && data.pricePerUnit is number && data.pricePerUnit > 0
+        && data.totalAmount is number && data.totalAmount > 0
+        && data.purchaseDate is string && data.purchaseDate.size() >= 8 && data.purchaseDate.size() <= 20
+        && data.paymentMethod is string && data.paymentMethod.size() >= 2 && data.paymentMethod.size() <= 40
+        && data.createdAt is timestamp;
+    }
+
+    // Customers Collection
+    match /customers/{customerId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn()
+        && isValidId(customerId)
+        && isValidCustomer(request.resource.data)
+        && request.resource.data.customerId == customerId;
+      allow update: if isSignedIn()
+        && isValidId(customerId)
+        && isValidCustomer(request.resource.data)
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phoneNo', 'dob', 'email', 'address']);
+      allow delete: if isSignedIn() && isValidId(customerId);
+    }
+
+    // Purchases Collection (linked to customers via customerId)
+    match /purchases/{purchaseId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn()
+        && isValidId(purchaseId)
+        && isValidPurchase(request.resource.data)
+        && request.resource.data.purchaseId == purchaseId
+        && exists(/databases/$(database)/documents/customers/$(request.resource.data.customerId));
+      allow update: if isSignedIn()
+        && isValidId(purchaseId)
+        && isValidPurchase(request.resource.data)
+        && request.resource.data.purchaseId == resource.data.purchaseId
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isSignedIn() && isValidId(purchaseId);
+    }
+  }
+}
